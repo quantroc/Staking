@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.4;
 
 import "hardhat/console.sol";
@@ -11,7 +12,7 @@ contract Staking is Ownable{
 
     RewardToken public rewardToken; // Token trả thưởng
 
-    uint256 private rewardTokensPerBlock; // Số lượng token thưởng được mint trên mỗi block
+    uint256 public rewardTokensPerBlock; // Số lượng token thưởng được mint trên mỗi block
     uint256 private constant REWARDS_PRECISION = 1e12; // số để mul và div
 
     // staking user
@@ -31,6 +32,7 @@ contract Staking is Ownable{
 
     Pool[] public pools;
 
+    // mapping poolId => staker address => PoolStaker
     mapping(uint256 => mapping(address => PoolStaker)) public poolStakers;
 
     event Deposit(address indexed user, uint256 indexed poolId, uint256 amount);
@@ -43,6 +45,9 @@ contract Staking is Ownable{
         rewardTokensPerBlock = _rewardTokensPerBlock;
     }
 
+    function poolLength() external view returns (uint) {
+        return pools.length;
+    }
     
     function createPool(IERC20 _stakeToken) external onlyOwner {
         Pool memory pool;
@@ -58,17 +63,17 @@ contract Staking is Ownable{
         Pool storage pool = pools[_poolId];
         PoolStaker storage staker = poolStakers[_poolId][msg.sender];
 
-        // Update pool stakers
+        // update pool stakers
         harvestRewards(_poolId);
 
-        // Update current staker
+        // update staker
         staker.amount = staker.amount + _amount;
         staker.rewardDebt = staker.amount * pool.accumulatedRewardsPerShare / REWARDS_PRECISION;
 
-        // Update pool
+        // update pool
         pool.tokensStaked = pool.tokensStaked + _amount;
 
-        // Deposit tokens
+        // deposit tokens
         emit Deposit(msg.sender, _poolId, _amount);
         pool.stakeToken.safeTransferFrom(
             address(msg.sender),
@@ -84,17 +89,17 @@ contract Staking is Ownable{
         uint256 amount = staker.amount;
         require(amount > 0, "Withdraw amount can't be zero");
 
-        // Pay rewards
+        // pay rewards
         harvestRewards(_poolId);
 
-        // Update staker
+        // update staker
         staker.amount = 0;
         staker.rewardDebt = staker.amount * pool.accumulatedRewardsPerShare / REWARDS_PRECISION;
 
-        // Update pool
+        // update pool
         pool.tokensStaked = pool.tokensStaked - amount;
 
-        // Withdraw tokens
+        // withdraw tokens
         emit Withdraw(msg.sender, _poolId, amount);
         pool.stakeToken.safeTransfer(
             address(msg.sender),
