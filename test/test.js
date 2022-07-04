@@ -18,7 +18,8 @@ describe("Staking contract", function () {
         RewardToken = await ethers.getContractFactory("RewardToken");
         rewardToken = await RewardToken.deploy();
         Staking = await ethers.getContractFactory("Staking");
-        staking = await Staking.deploy(rewardToken.address,20);      
+        staking = await Staking.deploy(rewardToken.address,20);
+        await rewardToken.transfer(addr1.address,2000);
     });
 
 
@@ -35,14 +36,24 @@ describe("Staking contract", function () {
         });
 
         it("deposit a token in pool", async function () {
-          const stakeToken = rewardToken;
-          await staking.createPool(stakeToken.address);
-          const amount = ethers.utils.parseEther("10");
-          await stakeToken.approve(staking.address, amount);
-
-          await staking.deposit(0, amount);
-          await expect(stakeToken.balanceOf(staking.address)).to.equal(amount);
+          let stakeToken = rewardToken;
+          await staking.createPool(rewardToken.address);
+          await(await rewardToken.connect(addr1).approve(staking.address, 500));
+          //console.log(await rewardToken.balanceOf(staking.address));
+          await staking.connect(addr1).deposit(0, 500);
+          console.log(await rewardToken.balanceOf(staking.address));
+          expect(await rewardToken.balanceOf(staking.address)).to.equal(500);
         })
+
+        it("withdraw all token from a pool", async function () {
+          await staking.createPool(rewardToken.address);
+          await( await rewardToken.connect(addr1).approve(staking.address,500));
+          await staking.connect(addr1).deposit(0, 500);
+          expect(await rewardToken.balanceOf(staking.address)).to.eq(500);
+
+          await staking.connect(addr1).withdraw(0);
+          expect(await rewardToken.balanceOf(staking.address)).to.eq(0);
+        });
       });
 });
 

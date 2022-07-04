@@ -12,7 +12,10 @@ contract RewardToken is ERC20, AccessControl {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
     }
 
-    function mint(address to, uint256 amount) public onlyRole(MINTER_ROLE) {
+    // function mint(address to, uint256 amount) public onlyRole(MINTER_ROLE) {
+    //     _mint(to, amount);
+    // }
+    function mint(address to, uint256 amount) public {
         _mint(to, amount);
     }
 }
