@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.4;
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.9;
 
 import "hardhat/console.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -7,132 +7,139 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./RewardToken.sol";
 
-contract Staking is Ownable{
+contract Staking is Ownable {
     using SafeERC20 for IERC20;
 
-    RewardToken public rewardToken; // Token trả thưởng
+    RewardToken public rewardToken; //token trả thưởng
 
-    uint256 public rewardTokensPerBlock; // Số lượng token thưởng được mint trên mỗi block
-    uint256 private constant REWARDS_PRECISION = 1e12; // số để mul và div
+    uint256 private rewardTokensPerBlock; //thưởng mỗi block
+    uint256 private constant REWARDS_PERCISION = 1e12;
 
-    // staking user
-    struct PoolStaker {
-        uint256 amount; // số lượng token user stake
-        uint256 rewards; // số lượng token user có thể rút
-        uint256 rewardDebt; // The amount relative to accumulatedRewardsPerShare the user can't get as reward
+    struct Staker {
+        uint256 amount; // số lượng token mà user stake
+        uint256 rewards; // số lượng token phần thưởng mà user có thể rút
+        uint256 rewardDebt; // số lượng token phần thưởng đã trừ đi phần thu hoạch
     }
 
-    // Staking pool
     struct Pool {
-        IERC20 stakeToken; // token  stake
-        uint256 tokensStaked; // tổng token đã stake
-        uint256 lastRewardedBlock; // khối cuối cùng mà người dùng đã tính phần thưởng
-        uint256 accumulatedRewardsPerShare; // phần thưởng tích lũy theo phần trăm share   
+        IERC20 stakeToken; //
+        uint256 totalTokenStaked; // tổng lượng token trong pool
+        uint256 lastRewardedBlock; //block cuối
+        uint256 accumulatedRewardsPerShare; // tổng reward per share
     }
 
-    Pool[] public pools;
+    Pool[] public pools; //staking pools
+    //poolId => staker address => Staler
+    mapping(uint256 => mapping(address => Staker)) public Stakers;
 
-    // mapping poolId => staker address => PoolStaker
-    mapping(uint256 => mapping(address => PoolStaker)) public poolStakers;
-
+    //event
+    event CreatePool(uint256 poolId);
     event Deposit(address indexed user, uint256 indexed poolId, uint256 amount);
-    event Withdraw(address indexed user, uint256 indexed poolId, uint256 amount);
-    event HarvestRewards(address indexed user, uint256 indexed poolId, uint256 amount);
-    event PoolCreated(uint256 poolId);
+    event WithDraw(
+        address indexed user,
+        uint256 indexed poolId,
+        uint256 amount
+    );
+    event HarvestReward(
+        address indexed user,
+        uint256 indexed poolId,
+        uint256 amount
+    );
 
-    constructor(address _rewardTokenAddress, uint256 _rewardTokensPerBlock) {
+    constructor(address _rewardTokenAddress, uint256 _rewardTokenPerBlock) {
         rewardToken = RewardToken(_rewardTokenAddress);
-        rewardTokensPerBlock = _rewardTokensPerBlock;
+        rewardTokensPerBlock = _rewardTokenPerBlock;
     }
 
-    function poolLength() external view returns (uint) {
-        return pools.length;
-    }
-    
     function createPool(IERC20 _stakeToken) external onlyOwner {
         Pool memory pool;
-        pool.stakeToken =  _stakeToken;
+        pool.stakeToken = _stakeToken;
         pools.push(pool);
         uint256 poolId = pools.length - 1;
-        emit PoolCreated(poolId);
+        emit CreatePool(poolId);
     }
 
-    
-    function deposit(uint256 _poolId, uint256 _amount) external {
-        require(_amount > 0, "K gui bang 0");
+    function deposit(uint256 _poolId, uint256 _amount) public {
+        require(_amount > 0, "can't deposit 0");
+
         Pool storage pool = pools[_poolId];
-        PoolStaker storage staker = poolStakers[_poolId][msg.sender];
+        Staker storage staker = Stakers[_poolId][msg.sender];
+        //update all staker
+        harvestReward(_poolId);
 
-        // update pool stakers
-        harvestRewards(_poolId);
-
-        // update staker
+        //update staker
         staker.amount = staker.amount + _amount;
-        staker.rewardDebt = staker.amount * pool.accumulatedRewardsPerShare / REWARDS_PRECISION;
+        staker.rewardDebt =
+            (staker.amount * pool.accumulatedRewardsPerShare) /
+            REWARDS_PERCISION;
 
-        // update pool
-        pool.tokensStaked = pool.tokensStaked + _amount;
+        //update pool
+        pool.totalTokenStaked = pool.totalTokenStaked + _amount;
 
-        // deposit tokens
         emit Deposit(msg.sender, _poolId, _amount);
-        pool.stakeToken.safeTransferFrom(
-            address(msg.sender),
-            address(this),
-            _amount
-        );
+
+        //deposit
+        pool.stakeToken.safeTransferFrom(msg.sender, address(this), _amount);
     }
 
-    
     function withdraw(uint256 _poolId) external {
         Pool storage pool = pools[_poolId];
-        PoolStaker storage staker = poolStakers[_poolId][msg.sender];
+        Staker storage staker = Stakers[_poolId][msg.sender];
+
         uint256 amount = staker.amount;
-        require(amount > 0, "Withdraw amount can't be zero");
+        require(amount > 0, "cant with draw 0");
 
-        // pay rewards
-        harvestRewards(_poolId);
+        //Pay reward
+        harvestReward(_poolId);
 
-        // update staker
+        //update staker
         staker.amount = 0;
-        staker.rewardDebt = staker.amount * pool.accumulatedRewardsPerShare / REWARDS_PRECISION;
+        staker.rewardDebt =
+            (staker.amount * pool.accumulatedRewardsPerShare) /
+            REWARDS_PERCISION;
 
-        // update pool
-        pool.tokensStaked = pool.tokensStaked - amount;
+        //update pool
+        pool.totalTokenStaked = pool.totalTokenStaked - amount;
 
-        // withdraw tokens
-        emit Withdraw(msg.sender, _poolId, amount);
-        pool.stakeToken.safeTransfer(
-            address(msg.sender),
-            amount
-        );
+        emit WithDraw(msg.sender, _poolId, amount);
+
+        //with draw
+        pool.stakeToken.safeTransfer(msg.sender, amount);
     }
 
-    
-    function harvestRewards(uint256 _poolId) public {
-        updatePoolRewards(_poolId);
+    function harvestReward(uint256 _poolId) public {
+        updatePoolReward(_poolId);
         Pool storage pool = pools[_poolId];
-        PoolStaker storage staker = poolStakers[_poolId][msg.sender];
-        uint256 rewardsToHarvest = (staker.amount * pool.accumulatedRewardsPerShare / REWARDS_PRECISION) - staker.rewardDebt;
-        if (rewardsToHarvest == 0) {
-            staker.rewardDebt = staker.amount * pool.accumulatedRewardsPerShare / REWARDS_PRECISION;
+        Staker storage staker = Stakers[_poolId][msg.sender];
+        uint256 rewardToHarvest = ((staker.amount *
+            pool.accumulatedRewardsPerShare) / REWARDS_PERCISION) -
+            staker.rewardDebt;
+        if (rewardToHarvest == 0) {
+            staker.rewardDebt =
+                (staker.amount * pool.accumulatedRewardsPerShare) /
+                REWARDS_PERCISION;
             return;
         }
         staker.rewards = 0;
-        staker.rewardDebt = staker.amount * pool.accumulatedRewardsPerShare / REWARDS_PRECISION;
-        emit HarvestRewards(msg.sender, _poolId, rewardsToHarvest);
-        rewardToken.mint(msg.sender, rewardsToHarvest);
+        staker.rewardDebt =
+            (staker.amount * pool.accumulatedRewardsPerShare) /
+            REWARDS_PERCISION;
+        emit HarvestReward(msg.sender, _poolId, rewardToHarvest);
+        rewardToken.mint(msg.sender, staker.rewardDebt);
     }
 
-    
-    function updatePoolRewards(uint256 _poolId) private {
+    function updatePoolReward(uint256 _poolId) private {
         Pool storage pool = pools[_poolId];
-        if (pool.tokensStaked == 0) {
+
+        if (pool.totalTokenStaked == 0) {
             pool.lastRewardedBlock = block.number;
             return;
         }
         uint256 blocksSinceLastReward = block.number - pool.lastRewardedBlock;
         uint256 rewards = blocksSinceLastReward * rewardTokensPerBlock;
-        pool.accumulatedRewardsPerShare = pool.accumulatedRewardsPerShare + (rewards * REWARDS_PRECISION / pool.tokensStaked);
+        pool.accumulatedRewardsPerShare =
+            pool.accumulatedRewardsPerShare +
+            ((rewards * pool.totalTokenStaked) / REWARDS_PERCISION);
         pool.lastRewardedBlock = block.number;
     }
 }
